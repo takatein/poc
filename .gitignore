@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+cdk.out/
+.env
+*.js.map
+# CDKビルド成果物のみ除外
+infra/cdk.out/
+!jest.config.js
