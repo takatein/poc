@@ -1,132 +1,113 @@
-# AWS Google Auth PoC
+# Document Review Agent
 
-AWS Cognito + Google OAuth でログインが正常に動作することを確認するための最小構成 PoC。
+Ollama (Gemma 4) + LangChain + MCP を使った資料レビューエージェント。
 
 ## アーキテクチャ
 
 ```
-[React App (localhost:3000)]
-        │
-        │ signInWithRedirect("Google")
-        ▼
-[Cognito Hosted UI]
-        │
-        │ Google OAuth redirect
-        ▼
-[Google OAuth 2.0]
-        │
-        │ Authorization Code
-        ▼
-[Cognito Callback → Token交換]
-        │
-        │ ID Token / Access Token
-        ▼
-[React App ログイン完了]
+┌─────────────────────────────────────────────────────────┐
+│                      クライアント                        │
+│  ┌─────────────┐              ┌─────────────────────┐  │
+│  │  CLI Agent  │              │   Web UI (Browser)  │  │
+│  │  cli/agent  │              │   web/index.html    │  │
+│  └──────┬──────┘              └──────────┬──────────┘  │
+└─────────┼────────────────────────────────┼─────────────┘
+          │                                │
+          ▼                                ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Ollama (Gemma 4)                     │
+│                   ツール呼び出し判断                      │
+└─────────────────────────┬───────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                     MCP Client                          │
+│                  mcp_client/client.py                   │
+└─────────────────────────┬───────────────────────────────┘
+                          │ stdin/stdout
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                     MCP Server                          │
+│                 mcp_server/server.py                    │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │ Tools:                                             │ │
+│  │  - review_document: レビュープロンプト生成          │ │
+│  │  - analyze_document_type: 資料タイプ分析           │ │
+│  └────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## 前提条件
+## フロー
 
-- Node.js 18+
-- AWS CLI（設定済み）
-- AWS CDK CLI（`npm install -g aws-cdk`）
-- Google Cloud Console で OAuth 2.0 クレデンシャルを作成済み
+1. ユーザーが資料をアップロード (CLI or Web)
+2. クライアントがBase64に変換
+3. Ollama (Gemma 4) がツール呼び出しを判断
+4. MCPサーバーが資料タイプ別のレビュープロンプトを生成
+5. Ollama がプロンプトを使ってレビュー実行
+6. ユーザーにレビュー結果を返却
 
-## セットアップ手順
-
-### Step 1: Google Cloud Console で OAuth クレデンシャル作成
-
-1. [Google Cloud Console](https://console.cloud.google.com/) → APIとサービス → 認証情報
-2. **OAuth 2.0 クライアント ID** を作成
-   - アプリケーションの種類: **ウェブアプリケーション**
-   - 承認済みの JavaScript 生成元: （空でOK）
-   - 承認済みのリダイレクト URI: **CDKデプロイ後に設定**（後述）
-3. **クライアント ID** と **クライアント シークレット** をメモ
-
-### Step 2: AWS にインフラをデプロイ
+## セットアップ
 
 ```bash
-# インフラの依存関係インストール
-cd infra && npm install && cd ..
-
-# CDK デプロイ（Google クレデンシャルを渡す）
-cd infra
-npx cdk deploy \
-  -c googleClientId="YOUR_GOOGLE_CLIENT_ID" \
-  -c googleClientSecret="YOUR_GOOGLE_CLIENT_SECRET"
-```
-
-デプロイ成功後、以下が出力されます：
-- `UserPoolId`
-- `UserPoolClientId`
-- `CognitoDomain`
-
-### Step 3: Google Cloud Console にリダイレクト URI を追加
-
-CDK の出力で得た `CognitoDomain` を使って、Google Cloud Console の OAuth クライアントに以下を追加：
-
-- 承認済みのリダイレクト URI: `https://{CognitoDomain}/oauth2/idpresponse`
-
-### Step 4: フロントエンドを起動
-
-```bash
-# ルートに戻る
-cd ..
-
 # 依存関係インストール
-npm install
+pip install -r requirements.txt
 
-# .env を作成（CDK出力値を設定）
-cp .env.example .env
-# .env を編集して CDK 出力の値を入力
-
-# 開発サーバー起動
-npm run dev
+# Ollama 起動 & モデル取得
+ollama serve
+ollama pull gemma4
 ```
 
-### Step 5: 動作確認
+## 使い方
 
-1. `http://localhost:3000` をブラウザで開く
-2. 「Google でログイン」ボタンをクリック
-3. Google アカウントを選択・認証
-4. `http://localhost:3000/` にリダイレクトされ、ユーザー情報が表示されれば成功！
-
-## リダイレクトループのトラブルシューティング
-
-リダイレクトループが発生する主な原因：
-
-| 原因 | 対策 |
-|------|------|
-| **callbackUrl の不一致** | Cognito App Client、Amplify設定、実際のURLの3箇所が完全一致すること（末尾 `/` 含む） |
-| **responseType の不一致** | `code`（Authorization Code + PKCE）を使用。`token`（Implicit）だと問題が起きやすい |
-| **Cookie / セッションの競合** | ブラウザの Cookie をクリアして再試行 |
-| **複数の認証ライブラリの干渉** | Amplify のみ使用し、他の認証ライブラリを混在させない |
-| **Hosted UI Domain の設定ミス** | `https://` プレフィックスを付けない（Amplify v6 ではドメイン名のみ） |
-
-## クリーンアップ
+### CLI Agent (対話型)
 
 ```bash
-cd infra
-npx cdk destroy
+python cli/agent.py
 ```
+
+コマンド:
+- `/file <path>` - ファイルをレビュー
+- `/clear` - 履歴クリア
+- `/quit` - 終了
+
+### Web UI
+
+```bash
+python app/main.py
+# → http://localhost:8000
+```
+
+ブラウザでファイルをドラッグ&ドロップしてレビュー。
 
 ## ファイル構成
 
 ```
 .
-├── index.html              # Vite エントリポイント
-├── package.json            # フロントエンド依存関係
-├── tsconfig.json
-├── vite.config.ts
-├── .env.example            # 環境変数テンプレート
-├── src/
-│   ├── main.tsx            # React エントリ + Amplify初期化
-│   ├── amplify-config.ts   # Amplify Auth 設定
-│   ├── App.tsx             # メイン画面（ログイン/ログアウト）
-│   └── vite-env.d.ts       # 型定義
-└── infra/                  # AWS CDK
-    ├── bin/app.ts          # CDK アプリエントリ
-    ├── lib/google-auth-stack.ts  # Cognito + Google IdP定義
-    ├── cdk.json
-    ├── package.json
-    └── tsconfig.json
+├── cli/
+│   └── agent.py          # CLIエージェント (LangChain + Ollama)
+├── app/
+│   └── main.py           # FastAPI サーバー
+├── mcp_client/
+│   └── client.py         # MCPクライアント
+├── mcp_server/
+│   └── server.py         # MCPサーバー (プロンプト生成)
+├── web/
+│   └── index.html        # Web UI
+└── requirements.txt
 ```
+
+## MCPサーバーのツール
+
+| ツール | 説明 |
+|--------|------|
+| `review_document` | Base64資料からレビュープロンプト生成 |
+| `analyze_document_type` | ファイル名から資料タイプを推測 |
+
+## 資料タイプ
+
+| タイプ | レビュー観点 |
+|--------|-------------|
+| `technical` | 技術的正確性、コード品質、セキュリティ |
+| `business` | ビジネス目標、実現可能性、ROI |
+| `design` | ユーザビリティ、アクセシビリティ |
+| `general` | 内容の正確性、構成、読みやすさ |
