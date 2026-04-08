@@ -1,11 +1,15 @@
 """
-MCP Server - 資料レビュー用プロンプト生成サーバー
+MCP Server - 資料レビューサーバー
 Base64エンコードされた資料を受け取り、AIレビュー用のプロンプトを生成
+または、Ollama (LLM) を使って直接レビューを実行
 """
 import json
 import sys
 import base64
+import os
 from typing import Any
+
+import requests
 
 
 class MCPServer:
@@ -15,10 +19,13 @@ class MCPServer:
         self.tools = {
             "review_document": self.review_document,
             "analyze_document_type": self.analyze_document_type,
+            "execute_review": self.execute_review,
         }
         self.prompts = {
             "document_review": self.get_document_review_prompt,
         }
+        self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "gemma4")
 
     def review_document(
         self, base64_content: str, document_type: str = "general", filename: str = ""
@@ -174,6 +181,69 @@ class MCPServer:
             "suggested_type": suggested_type,
         }
 
+    def execute_review(
+        self, base64_content: str, document_type: str = "general", filename: str = ""
+    ) -> dict[str, Any]:
+        """
+        Base64資料をOllama (LLM) で直接レビューして結果を返す
+
+        Args:
+            base64_content: Base64エンコードされた資料内容
+            document_type: 資料タイプ (technical, business, design, general)
+            filename: ファイル名
+        """
+        # まずプロンプトを生成
+        prompt_result = self.review_document(base64_content, document_type, filename)
+        prompt = prompt_result.get("prompt", "")
+
+        if not prompt:
+            return {
+                "success": False,
+                "error": "プロンプト生成に失敗しました",
+                "review": None,
+            }
+
+        # Ollamaでレビュー実行
+        try:
+            response = requests.post(
+                f"{self.ollama_base_url}/api/generate",
+                json={
+                    "model": self.ollama_model,
+                    "prompt": prompt,
+                    "stream": False,
+                },
+                timeout=120,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            return {
+                "success": True,
+                "filename": filename,
+                "document_type": document_type,
+                "review": result.get("response", ""),
+                "model": self.ollama_model,
+            }
+
+        except requests.exceptions.ConnectionError:
+            return {
+                "success": False,
+                "error": f"Ollamaに接続できません ({self.ollama_base_url})",
+                "review": None,
+            }
+        except requests.exceptions.Timeout:
+            return {
+                "success": False,
+                "error": "Ollamaからの応答がタイムアウトしました",
+                "review": None,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "review": None,
+            }
+
     def get_document_review_prompt(self) -> dict[str, Any]:
         """資料レビュー用のプロンプトテンプレートを返す"""
         return {
@@ -244,6 +314,26 @@ class MCPServer:
                                     },
                                 },
                                 "required": ["filename", "base64_content"],
+                            },
+                        },
+                        {
+                            "name": "execute_review",
+                            "description": "Base64資料をOllama (LLM) で直接レビューして結果を返す",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "base64_content": {
+                                        "type": "string",
+                                        "description": "Base64エンコードされた資料",
+                                    },
+                                    "document_type": {
+                                        "type": "string",
+                                        "enum": ["technical", "business", "design", "general"],
+                                        "description": "資料タイプ",
+                                    },
+                                    "filename": {"type": "string", "description": "ファイル名"},
+                                },
+                                "required": ["base64_content"],
                             },
                         },
                     ]
