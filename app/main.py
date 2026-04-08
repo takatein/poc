@@ -79,7 +79,7 @@ class ReviewResponse(BaseModel):
 def get_llm() -> ChatOllama:
     """Ollama LLMインスタンスを取得"""
     return ChatOllama(
-        model=os.getenv("OLLAMA_MODEL", "llama3.2"),
+        model=os.getenv("OLLAMA_MODEL", "gemma4"),
         base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         temperature=0.7,
     )

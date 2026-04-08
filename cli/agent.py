@@ -21,7 +21,7 @@ from mcp_client.client import MCPClient
 class MCPAgentCLI:
     """MCP統合CLIエージェント"""
 
-    def __init__(self, model: str = "llama3.2"):
+    def __init__(self, model: str = "gemma4"):
         self.model = model
         self.mcp_client: MCPClient | None = None
         self.agent_executor: AgentExecutor | None = None
@@ -231,7 +231,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Ollama CLI Agent with MCP")
-    parser.add_argument("--model", default="llama3.2", help="Ollama model name")
+    parser.add_argument("--model", default="gemma4", help="Ollama model name")
     args = parser.parse_args()
 
     agent = MCPAgentCLI(model=args.model)
